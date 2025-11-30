@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>To-Do List with Time & Reminders (Max 10)</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f4f6f8;padding:20px}
+  #todo-container{max-width:720px;margin:0 auto;background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.07)}
+  h1{margin:0 0 12px;font-size:22px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  input[type="text"]{flex:1;padding:10px;border-radius:6px;border:1px solid #cfd8dc;font-size:15px}
+  input[type="time"]{width:130px;padding:9px;border-radius:6px;border:1px solid #cfd8dc}
+  button{padding:10px 14px;border-radius:6px;border:0;background:#1976d2;color:#fff;cursor:pointer;font-weight:600}
+  button:disabled{opacity:0.6;background:#90caf9;cursor:not-allowed}
+  .meta{margin-bottom:12px;color:#555;font-size:14px}
+  ul{list-style:none;padding:0;margin:0}
+  li{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:8px;border:1px solid #e2e8f0;background:#fbfdff;margin-bottom:8px}
+  .left{display:flex;gap:12px;align-items:center;flex:1}
+  .task-text{font-size:15px}
+  .time{font-size:13px;color:#666;background:#eef3ff;padding:6px 8px;border-radius:6px}
+  .completed .task-text{ text-decoration:line-through;color:gray }
+  .controls-on-item{display:flex;gap:6px;align-items:center}
+  .icon-btn{border:0;padding:8px;border-radius:6px;cursor:pointer;font-weight:600}
+  .edit{background:#0288d1;color:#fff}
+  .del{background:#e53935;color:#fff}
+  .comp{background:#ffb300;color:#fff}
+  .reminder-due{box-shadow:0 0 12px rgba(255,180,0,0.22);border-color:#ffd54f}
+  .badge{font-size:13px;color:#fff;background:#43a047;padding:6px 8px;border-radius:6px}
+  .danger{background:#e53935}
+  .info{background:#1976d2}
+  .count{font-weight:700}
+  .small{font-size:13px;color:#666}
+</style>
+</head>
+<body>
+  <div id="todo-container">
+    <h1>To-Do List — Add / Edit / Delete / Complete / Reminders (Max 10)</h1>
+    <div class="meta">
+      <span class="small">You can add up to <span class="count">10</span> tasks. Reminders use your browser notification permission (or alert if blocked).</span>
+    </div>
+
+    <div class="controls">
+      <input id="taskInput" type="text" placeholder="Enter task (e.g., Complete Homework)">
+      <input id="timeInput" type="time" title="Reminder time (HH:MM)">
+      <button id="addBtn" onclick="addTask()">Add Task</button>
+      <button id="clearAll" onclick="clearAll()" style="background:#9e9e9e">Clear All</button>
+    </div>
+
+    <div id="status" class="small" style="margin-bottom:8px"></div>
+
+    <ul id="taskList"></ul>
+  </div>
+
+<script>
+/*
+  To-Do App with:
+  - Add/Edit/Delete/Complete
+  - Time field for reminder HH:MM
+  - localStorage persistence
+  - Max 10 tasks
+  - Periodic reminder check with Notification API fallback to alert
+  - Preloaded 10 sample daily tasks on first run
+*/
+
+const STORAGE_KEY = "todoTasks_v1_max10_withReminders";
+let tasks = [];
+
+// Preload 10 daily tasks (only on first run)
+const PRELOAD = [
+  {text:"Complete Homework", time:"18:00", completed:false},
+  {text:"Study for Exams", time:"19:00", completed:false},
+  {text:"Go for a Walk", time:"06:30", completed:false},
+  {text:"Clean the Room", time:"17:00", completed:false},
+  {text:"Buy Groceries", time:"16:00", completed:false},
+  {text:"Attend Online Class", time:"09:00", completed:false},
+  {text:"Practice Coding", time:"20:00", completed:false},
+  {text:"Call a Friend/Family", time:"21:30", completed:false},
+  {text:"Finish College Assignment", time:"22:00", completed:false},
+  {text:"Watch a Tutorial Video", time:"15:00", completed:false}
+];
+
+// On first load, populate tasks from localStorage or preload
+window.addEventListener("load", () => {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) {
+    // Save preload and mark notified:false for each
+    tasks = PRELOAD.map(t => ({...t, notified:false}));
+    saveTasks();
+  } else {
+    try {
+      tasks = JSON.parse(raw);
+      // ensure notified flag exists (in case older format)
+      tasks = tasks.map(t => ("notified" in t) ? t : {...t, notified:false});
+    } catch(e) {
+      tasks = [];
+    }
+  }
+  displayTasks();
+  requestNotificationPermission();
+  // check reminders every 30 seconds
+  setInterval(checkReminders, 30*1000);
+  // also run check immediately
+  setTimeout(checkReminders, 1000);
+});
+
+function saveTasks(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  updateStatus();
+}
+
+function updateStatus(){
+  const status = document.getElementById("status");
+  const remaining = tasks.length;
+  const max = 10;
+  const addBtn = document.getElementById("addBtn");
+  if (remaining >= max) {
+    status.innerHTML = `<span style="color:#e53935">Maximum ${max} tasks reached. Delete one to add new.</span>`;
+    addBtn.disabled = true;
+  } else {
+    status.innerHTML = `<span>${remaining}/${max} tasks saved.</span>`;
+    addBtn.disabled = false;
+  }
+}
+
+function addTask(){
+  const txt = document.getElementById("taskInput").value.trim();
+  const time = document.getElementById("timeInput").value;
+  if (!txt) { alert("Enter a task description."); return; }
+  if (!time) { alert("Select a time (HH:MM) for the reminder."); return; }
+  if (tasks.length >= 10) { alert("You can only have 10 tasks. Delete one to add more."); return; }
+
+  tasks.push({ text: txt, time: time, completed:false, notified:false });
+  saveTasks();
+  displayTasks();
+  document.getElementById("taskInput").value = "";
+  document.getElementById("timeInput").value = "";
+}
+
+// Edit using prompt for simplicity (preserves notified flag)
+function editTask(index){
+  const t = tasks[index];
+  const newText = prompt("Edit task text:", t.text);
+  if (newText === null) return; // cancelled
+  const newTime = prompt("Edit time (HH:MM):", t.time);
+  if (newTime === null) return;
+  const valid = /^\d{2}:\d{2}$/.test(newTime);
+  if (!valid) { alert("Time format must be HH:MM"); return; }
+
+  tasks[index].text = newText.trim() || t.text;
+  tasks[index].time = newTime;
+  // reset notified flag so reminder can fire again for new time (unless completed)
+  tasks[index].notified = false;
+  saveTasks();
+  displayTasks();
+}
+
+function deleteTask(index){
+  if(!confirm("Delete this task?")) return;
+  tasks.splice(index,1);
+  saveTasks();
+  displayTasks();
+}
+
+function toggleComplete(index){
+  tasks[index].completed = !tasks[index].completed;
+  // when marking completed, we can avoid reminding again
+  if (tasks[index].completed) tasks[index].notified = true;
+  else tasks[index].notified = false; // allow reminders again
+  saveTasks();
+  displayTasks();
+}
+
+function clearAll(){
+  if (!confirm("Clear ALL tasks and reset to 10 default tasks?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  tasks = PRELOAD.map(t=>({...t, notified:false}));
+  saveTasks();
+  displayTasks();
+}
+
+function displayTasks(){
+  const list = document.getElementById("taskList");
+  list.innerHTML = "";
+  tasks.forEach((task, i) => {
+    const li = document.createElement("li");
+    if (task.completed) li.classList.add("completed");
+    // if reminder is due and not completed, add visual class
+    if (isTimeDue(task.time) && !task.completed && !task.notified) {
+      li.classList.add("reminder-due");
+    }
+    const left = document.createElement("div");
+    left.className = "left";
+    const txt = document.createElement("div");
+    txt.className = "task-text";
+    txt.textContent = task.text;
+    const meta = document.createElement("div");
+    meta.className = "time";
+    meta.textContent = "⏰ " + task.time;
+    left.appendChild(txt);
+    left.appendChild(meta);
+
+    const right = document.createElement("div");
+    right.className = "controls-on-item";
+
+    const compBtn = document.createElement("button");
+    compBtn.className = "icon-btn comp";
+    compBtn.textContent = task.completed ? "Undo" : "Complete";
+    compBtn.onclick = ()=> toggleComplete(i);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "icon-btn edit";
+    editBtn.textContent = "Edit";
+    editBtn.onclick = ()=> editTask(i);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "icon-btn del";
+    delBtn.textContent = "Delete";
+    delBtn.onclick = ()=> deleteTask(i);
+
+    right.appendChild(compBtn);
+    right.appendChild(editBtn);
+    right.appendChild(delBtn);
+
+    li.appendChild(left);
+    li.appendChild(right);
+    list.appendChild(li);
+  });
+  updateStatus();
+}
+
+// Reminder utilities
+function requestNotificationPermission(){
+  if (!("Notification" in window)) return; // no notifications supported
+  if (Notification.permission === "default") {
+    Notification.requestPermission().then(permission => {
+      // no action needed here
+    });
+  }
+}
+
+function checkReminders(){
+  // For each task, if time matches current HH:MM and not completed and not yet notified => notify
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0');
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  const cur = hh + ":" + mm;
+
+  tasks.forEach((task, idx) => {
+    if (task.completed) return;
+    if (task.notified) return;
+    // If task.time <= current time (meaning due) we should notify.
+    // Compare HH:MM lexicographically is fine.
+    if (task.time <= cur) {
+      sendReminder(task, idx);
+    }
+  });
+}
+
+function isTimeDue(taskTime){
+  const now = new Date();
+  const cur = String(now.getHours()).padStart(2,'0') + ":" + String(now.getMinutes()).padStart(2,'0');
+  return (!tasks.length) ? false : (taskTime <= cur);
+}
+
+function sendReminder(task, idx){
+  // mark notified before attempting notification to avoid duplicates
+  tasks[idx].notified = true;
+  saveTasks();
+
+  const title = "Task Reminder";
+  const body = `${task.text} — ${task.time}`;
+
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification(title, { body });
+    } catch(e) {
+      // fallback to alert
+      alert(body);
+    }
+  } else {
+    // fallback - use alert and highlight
+    try { alert("Reminder: " + body); } catch(e){ /* ignore */ }
+  }
+  // also update UI to show due highlight removed if completed later
+  displayTasks();
+}
+
+// Helper: for debugging (not necessary)
+// function dumpTasks(){ console.log(tasks); }
+
+</script>
+</body>
+</html>
